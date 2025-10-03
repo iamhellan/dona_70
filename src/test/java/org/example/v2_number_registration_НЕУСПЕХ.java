@@ -9,7 +9,7 @@ import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class v2_number_registration_ПРОЦЕСС {
+public class v2_number_registration_НЕУСПЕХ {
     static Playwright playwright;
     static Browser browser;
     static BrowserContext context;

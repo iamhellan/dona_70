@@ -4,6 +4,10 @@ import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.WaitForSelectorState;
 import org.junit.jupiter.api.*;
 
+import java.nio.file.Paths;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 public class v2_id_authorization {
     static Playwright playwright;
     static Browser browser;
@@ -35,18 +39,31 @@ public class v2_id_authorization {
 
         System.out.println("Вводим ID");
         page.waitForTimeout(1000);
-        page.fill("input#auth_id_email", "168715375");
+// Получаем из config.properties:
+        String login = ConfigHelper.get("login");
+        page.fill("input#auth_id_email", login);
 
         System.out.println("Вводим пароль");
         page.waitForTimeout(1000);
-        page.fill("input#auth-form-password", "Aezakmi11+");
+        String password = ConfigHelper.get("password");
+        page.fill("input#auth-form-password", password);
 
         System.out.println("Жмём 'Войти' в форме авторизации");
         page.waitForTimeout(1000);
         page.locator("button.auth-button:has-text('Войти')").click();
 
-        System.out.println("Ждём 20 секунд (капча после 'Войти', если есть)");
-        page.waitForTimeout(20000);
+
+        System.out.println("Теперь решай капчу вручную — я жду появление кнопки 'Выслать код' (до 10 минут)...");
+        try {
+            page.waitForSelector("button.phone-sms-modal-content__send",
+                    new Page.WaitForSelectorOptions()
+                            .setTimeout(600_000) // максимум 10 минут, чтобы спокойно решить
+                            .setState(WaitForSelectorState.VISIBLE)
+            );
+            System.out.println("Кнопка 'Выслать код' появилась ✅");
+        } catch (PlaywrightException e) {
+            throw new RuntimeException("Кнопка 'Выслать код' не появилась — капча не решена или что-то пошло не так!");
+        }
 
         System.out.println("Ждём модальное окно SMS");
         page.waitForSelector("button:has-text('Выслать код')");
@@ -75,27 +92,41 @@ public class v2_id_authorization {
             throw new RuntimeException("Поле для ввода кода не появилось — капча не решена или что-то пошло не так!");
         }
 
-        System.out.println("Открываем Google Messages");
-        Page messagesPage = context.newPage();
+        // Открываем Google Messages с уже сохранённой сессией
+        BrowserContext messagesContext = browser.newContext(
+                new Browser.NewContextOptions().setStorageStatePath(Paths.get("messages-session.json"))
+        );
+        Page messagesPage = messagesContext.newPage();
         messagesPage.navigate("https://messages.google.com/web/conversations");
 
-        System.out.println("Закрываем уведомление 'Нет, не нужно' (если есть)");
-        if (messagesPage.locator("button:has-text('Нет, не нужно')").isVisible()) {
-            messagesPage.click("button:has-text('Нет, не нужно')");
+        // 1. Кликаем по самому верхнему (новому) чату в списке:
+        Locator chat = messagesPage.locator("mws-conversation-list-item").first();
+        chat.click();
+        messagesPage.waitForTimeout(1000); // даём загрузиться
+
+// Кликаем по самому верхнему чату, как раньше
+        chat = messagesPage.locator("mws-conversation-list-item").first();
+        int chatsCount = messagesPage.locator("mws-conversation-list-item").count();
+        System.out.println("Чатов найдено: " + chatsCount);
+        chat.click();
+        messagesPage.waitForTimeout(1000);
+
+// Новый универсальный селектор — вытаскиваем все коды из всех сообщений!
+        Locator messageNodes = messagesPage.locator("mws-message-part-content div.text-msg-content div.text-msg.msg-content div.ng-star-inserted");
+        int count = messageNodes.count();
+        System.out.println("Сообщений найдено: " + count);
+        for (int i = 0; i < count; i++) {
+            System.out.println("[" + i + "] " + messageNodes.nth(i).innerText());
         }
+        if (count == 0) throw new RuntimeException("Сообщения не найдены! (Проверь, что чат не пуст и аккаунт авторизован)");
 
-        System.out.println("Жмём кнопку 'Подключить, отсканировав QR-код'");
-        messagesPage.locator("span.qr-text:has-text('Подключить, отсканировав QR-код')").click();
+        String smsText = messageNodes.nth(count - 1).innerText();
+        System.out.println("Содержимое последнего SMS: " + smsText);
 
-        System.out.println("Ищем последнее сообщение от 1xBet");
-        Locator lastMessage = messagesPage.locator("mws-conversation-list-item").first();
-        lastMessage.waitFor();
-
-        String smsText = lastMessage.innerText();
-        System.out.println("Содержимое SMS: " + smsText);
-
+// Оставляю твой парсер кода — если нужно другое регулярное выражение, подскажу!
         String code = smsText.split("\\s+")[0].trim();
         System.out.println("Извлечённый код подтверждения: " + code);
+
 
         System.out.println("Возвращаемся на сайт 1xbet.kz");
         page.bringToFront();
